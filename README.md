@@ -64,3 +64,19 @@ Endpoint	Method	Description
 http://127.0.0.1:8000/api/token/
 ![image](https://github.com/user-attachments/assets/0b34cb66-28cb-4a76-aecc-0ae0a9a950d6)
 
+
+I built a blog platform using Django REST Framework with JWT login. Users can create/manage posts, like,
+ comment, and view with pagination and search. Frontend is built using Bootstrap + JS, and permissions are
+ enforced to allow only the post creator to modify posts.
+
+ 🛠️ Recent Fixes & Updates:
+✅ Reintegrated like & comment functionality from the previously working version.
+
+✅ Fixed new user issue: Now, newly registered users can successfully add blogs, and the blogs show up correctly on the main page.
+
+✅ Ensured only authors can update/delete their posts.
+
+✅ Combined search functionality with paginated blog listing.
+
+✅ Improved frontend JavaScript logic for better user experience and cleaner code.
+
