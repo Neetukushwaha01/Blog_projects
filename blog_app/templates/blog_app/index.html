@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>📚 My Blog Page</title>
+
+  <!-- Bootstrap 5 -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+  <!-- Tiny custom style -->
+  <style>
+    body            { background:#f8f9fa; }
+    .card-title      { font-weight:600; }
+    .author-date     { font-size:.9rem; color:#888; }
+    .comment-meta    { font-size:.75rem; color:#666; }
+    .action-buttons  { margin-top:10px; }
+    .like-share-btn  { margin-right:8px; }
+  </style>
+</head>
+
+<body>
+<div class="container mt-4">
+
+  <h2 class="text-center mb-4">📖 My Blog</h2>
+
+  <!-- 🔍 Search bar -->
+  <div class="input-group mb-3">
+    <input id="search-input" type="text" class="form-control" placeholder="Search by title or content">
+    <button class="btn btn-outline-secondary" onclick="runSearch()">Search</button>
+    <button class="btn btn-outline-danger"    onclick="clearSearch()">Clear</button>
+  </div>
+
+  <!-- ✍️ Add / Edit Blog Form -->
+  <form id="blog-form" class="mb-4">
+    <input type="hidden" id="blog-id">
+    <div class="mb-2">
+      <input id="title" class="form-control" placeholder="Blog Title" required minlength="3">
+    </div>
+    <div class="mb-2">
+      <textarea id="content" class="form-control" rows="3" placeholder="Blog Content (min 10 chars)" required minlength="10"></textarea>
+    </div>
+    <div class="mb-3">
+      <select id="status" class="form-select" required>
+        <option value="">Select Status</option>
+        <option value="published">Published</option>
+        <option value="draft">Draft</option>
+      </select>
+    </div>
+    <button type="submit" class="btn btn-primary">💾 Save Blog</button>
+    <button type="button" class="btn btn-secondary" onclick="resetForm()">Cancel</button>
+  </form>
+
+  <!-- 📝 Blog post list -->
+  <div id="posts-container"></div>
+
+  <!-- 🔽 Load More -->
+  <div class="text-center">
+    <button id="load-more-btn" class="btn btn-primary mt-3" onclick="loadPosts()">🔽 Load More</button>
+  </div>
+</div>
+
+<!-- 🌐 Main JS -->
+<script>
+  /* --------------- Helpers --------------- */
+  function getAuthHeaders () {
+    const token = localStorage.getItem('access');
+    return {
+      'Content-Type':'application/json',
+      'Authorization':`Bearer ${token}`
+    };
+  }
+
+  /* --------------- Pagination / Search state --------------- */
+  let page     = 1;
+  let hasNext  = true;
+  let editingId= null;
+  let queryStr = '';
+
+  /* --------------- Load blog posts --------------- */
+  async function loadPosts (reset=false) {
+    if (!hasNext && !reset) return;
+
+    const container = document.getElementById('posts-container');
+    if (reset) {
+      container.innerHTML='';
+      page    = 1;
+      hasNext = true;
+    }
+
+    const url = queryStr
+        ? `/api/search/?q=${encodeURIComponent(queryStr)}&page=${page}`
+        : `/api/posts/?page=${page}`;
+
+    const res  = await fetch(url,{headers:getAuthHeaders()});
+    if (!res.ok) { alert('❌ Failed to load posts'); return; }
+
+    const data = await res.json();
+    const posts= data.results || data;
+
+    posts.forEach(renderPostCard);
+
+    /* pagination */
+    if (!data.next) {
+      hasNext=false;
+      document.getElementById('load-more-btn').style.display='none';
+    } else {
+      document.getElementById('load-more-btn').style.display='inline-block';
+    }
+    page++;
+  }
+
+  /* --------------- Render a single post --------------- */
+  function renderPostCard (post) {
+    const currentUser= localStorage.getItem('username');
+    const canEdit    = post.author===currentUser;
+    const likeUsers  = post.likes?.length ? post.likes.join(', ') : 'No one yet';
+
+    const editBtns   = canEdit ? `
+       <button class="btn btn-sm btn-warning me-2"
+               onclick="editPost(${post.id}, \`${escapeHtml(post.title)}\`, \`${escapeHtml(post.content)}\`, '${post.status}')">✏️ Edit</button>
+       <button class="btn btn-sm btn-danger"
+               onclick="deletePost(${post.id})">🗑️ Delete</button>` : '';
+
+    const card = document.createElement('div');
+    card.className='card mb-4 shadow';
+    card.innerHTML = `
+      <div class="card-body">
+        <h5 class="card-title">${post.title}</h5>
+        <p class="author-date">👤 ${post.author} | ${new Date(post.timestamp).toLocaleDateString()}</p>
+        <p class="card-text">${post.content.length>200 ? post.content.slice(0,200)+'…' : post.content}</p>
+
+        <div class="action-buttons">
+          <button class="btn btn-sm btn-outline-danger like-share-btn"
+                  onclick="toggleLike(${post.id})">❤️ Like</button>
+          <button class="btn btn-sm btn-outline-success like-share-btn"
+                  onclick="sharePost(${post.id})">🔗 Share</button>
+          <small class="text-muted" id="like-status-${post.id}">
+            ❤️ Liked by: ${likeUsers}
+          </small>
+        </div>
+
+        <!-- 💬 Comment -->
+        <div class="mt-3">
+          <textarea id="comment-${post.id}" rows="1" class="form-control mb-2"
+                    placeholder="Add a comment..."></textarea>
+          <button class="btn btn-sm btn-outline-primary mb-2"
+                  onclick="submitComment(${post.id})">Post</button>
+          <div id="comments-${post.id}" class="mt-2"></div>
+        </div>
+
+        ${editBtns && `<div class="mt-2">${editBtns}</div>`}
+      </div>`;
+    document.getElementById('posts-container').appendChild(card);
+
+    fetchComments(post.id);
+  }
+
+  /* --------------- Blog CRUD --------------- */
+  async function savePost (e) {
+    e.preventDefault();
+    const title  = document.getElementById('title').value.trim();
+    const content= document.getElementById('content').value.trim();
+    const status = document.getElementById('status').value;
+
+    if (title.length<3 || content.length<10) return alert('❌ Invalid data');
+
+    const body   = JSON.stringify({title,content,status});
+    const url    = editingId ? `/api/posts/${editingId}/` : '/api/posts/';
+    const method = editingId ? 'PUT' : 'POST';
+
+    const res = await fetch(url,{method,headers:getAuthHeaders(),body});
+    if (res.ok) {
+      alert(editingId?'✅ Blog updated':'✅ Blog created');
+      resetForm();
+      loadPosts(true);
+    } else alert('❌ Failed to save blog');
+  }
+
+  function editPost(id,title,content,status){
+    document.getElementById('blog-id').value=id;
+    document.getElementById('title').value   =title;
+    document.getElementById('content').value =content;
+    document.getElementById('status').value  =status;
+    editingId=id;
+    window.scrollTo({top:0,behavior:'smooth'});
+  }
+
+  async function deletePost(id){
+    if(!confirm('Delete this post?')) return;
+    const res=await fetch(`/api/posts/${id}/`,{method:'DELETE',headers:getAuthHeaders()});
+    if(res.status===204){ alert('🗑️ Deleted'); loadPosts(true);}
+    else alert('❌ Delete failed');
+  }
+
+  function resetForm(){
+    document.getElementById('blog-form').reset();
+    editingId=null;
+  }
+  // ❤️ Like Function
+async function toggleLike(postId) {
+  const res = await fetch(`/api/posts/${postId}/like/`, {
+    method: 'POST',
+    headers: getAuthHeaders()
+  });
+
+  if (res.status === 401) {
+    alert("🔒 Please login again.");
+    localStorage.removeItem("access");
+    window.location.href = "/login/";
+    return;
+  }
+
+  // Get updated post for like count
+  const updatedPostRes = await fetch(`/api/posts/${postId}/`, {
+    method: 'GET',
+    headers: getAuthHeaders()
+  });
+
+  const updatedPost = await updatedPostRes.json();
+  const likeUsers = updatedPost.likes.length > 0 ? updatedPost.likes.join(', ') : 'No one yet';
+  document.getElementById(`like-status-${postId}`).innerText = `❤ Liked by: ${likeUsers}`;
+}
+
+// 🔗 Share Function (optional)
+async function sharePost(postId) {
+  const url = `${window.location.origin}/posts/${postId}/`;
+  navigator.clipboard.writeText(url)
+    .then(() => alert("🔗 Post link copied to clipboard!"))
+    .catch(() => alert("❌ Failed to copy link."));
+}
+
+// 💬 Submit Comment
+async function submitComment(postId) {
+  const content = document.getElementById(`comment-${postId}`).value;
+  if (!content.trim()) return alert("⚠️ Please enter a comment.");
+
+  const res = await fetch(`/api/posts/${postId}/comments/`, {
+    method: 'POST',
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ content: content })
+  });
+
+  if (res.status === 401) {
+    alert("🔒 Please login to post a comment.");
+    window.location.href = "/login/";
+    return;
+  }
+
+  if (res.ok) {
+    fetchComments(postId);  // refresh comments
+    document.getElementById(`comment-${postId}`).value = "";
+  } else {
+    alert("❌ Failed to post comment.");
+  }
+}
+
+// 💬 Fetch Comments
+async function fetchComments(postId) {
+  const res = await fetch(`/api/posts/${postId}/comments/`);
+  const comments = await res.json();
+  const commentDiv = document.getElementById(`comments-${postId}`);
+  commentDiv.innerHTML = comments.map(c => `
+    <div>
+      <strong>${c.user}</strong>: ${c.content}
+      <div class="comment-meta">💬 ${c.user} commented</div>
+      <hr style="margin: 4px 0;">
+    </div>
+  `).join('');
+}
+
+<!--  /* -&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45; LIKE -&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45; */-->
+<!--  async function toggleLike(postId){-->
+<!--    const res=await fetch(`/api/posts/${postId}/like/`,{method:'POST',headers:getAuthHeaders()});-->
+<!--    if(res.ok){-->
+<!--      const data=await res.json();-->
+<!--      const likeText=data.likes.length?data.likes.join(', '):'No one yet';-->
+<!--      document.getElementById(`like-status-${postId}`).innerText=`❤️ Liked by: ${likeText}`;-->
+<!--    } else alert('❌ Like failed');-->
+<!--  }-->
+
+<!--  /* -&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45; COMMENT -&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45;&#45; */-->
+<!--  async function submitComment(postId){-->
+<!--    const inp=document.getElementById(`comment-${postId}`);-->
+<!--    const text=inp.value.trim();-->
+<!--    if(!text) return alert('❌ Comment empty');-->
+<!--    const res=await fetch(`/api/posts/${postId}/comment/`,{-->
+<!--      method:'POST',headers:getAuthHeaders(),body:JSON.stringify({text})-->
+<!--    });-->
+<!--    if(res.ok){ inp.value=''; fetchComments(postId);}-->
+<!--    else alert('❌ Comment failed');-->
+<!--  }-->
+
+  async function fetchComments(postId){
+    const res=await fetch(`/api/posts/${postId}/comment/`,{headers:getAuthHeaders()});
+    if(!res.ok) return;
+    const comments=await res.json();
+    document.getElementById(`comments-${postId}`).innerHTML=
+      comments.map(c=>`
+        <div class="border rounded p-2 mb-1">
+          <strong>${c.user}</strong>: ${c.text}
+          <div class="comment-meta">${new Date(c.timestamp).toLocaleString()}</div>
+        </div>`).join('');
+  }
+
+  /* --------------- SHARE (placeholder) --------------- */
+  function sharePost(id){
+    navigator.clipboard?.writeText(window.location.href+`#post-${id}`);
+    alert('🔗 Link copied!');
+  }
+
+  /* --------------- Search handlers --------------- */
+  function runSearch(){
+    queryStr=document.getElementById('search-input').value.trim();
+    loadPosts(true);
+  }
+  function clearSearch(){
+    document.getElementById('search-input').value='';
+    queryStr='';
+    loadPosts(true);
+  }
+
+  /* --------------- Escaping helper --------------- */
+  function escapeHtml(str){
+    return str.replace(/[&<>"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+  }
+
+  /* --------------- Init --------------- */
+  document.getElementById('blog-form').addEventListener('submit',savePost);
+  document.addEventListener('DOMContentLoaded',()=>loadPosts());
+</script>
+</body>
+</html>
+
